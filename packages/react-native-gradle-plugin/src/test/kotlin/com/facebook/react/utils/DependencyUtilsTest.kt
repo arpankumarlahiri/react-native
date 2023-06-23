@@ -10,8 +10,10 @@ package com.facebook.react.utils
 import com.facebook.react.tests.createProject
 import com.facebook.react.utils.DependencyUtils.configureDependencies
 import com.facebook.react.utils.DependencyUtils.configureRepositories
+import com.facebook.react.utils.DependencyUtils.getDependencySubstitutions
+import com.facebook.react.utils.DependencyUtils.mavenRepoFromURI
 import com.facebook.react.utils.DependencyUtils.mavenRepoFromUrl
-import com.facebook.react.utils.DependencyUtils.readVersionString
+import com.facebook.react.utils.DependencyUtils.readVersionAndGroupStrings
 import java.net.URI
 import org.gradle.api.artifacts.repositories.MavenArtifactRepository
 import org.gradle.testfixtures.ProjectBuilder
@@ -27,9 +29,9 @@ class DependencyUtilsTest {
   @Test
   fun configureRepositories_withProjectPropertySet_configuresMavenLocalCorrectly() {
     val localMaven = tempFolder.newFolder("m2")
-    val localMavenURI = URI.create("file://$localMaven/")
+    val localMavenURI = localMaven.toURI()
     val project = createProject()
-    project.extensions.extraProperties.set("REACT_NATIVE_MAVEN_LOCAL_REPO", localMaven)
+    project.extensions.extraProperties.set("REACT_NATIVE_MAVEN_LOCAL_REPO", localMaven.absolutePath)
 
     configureRepositories(project, tempFolder.root)
 
@@ -110,10 +112,10 @@ class DependencyUtilsTest {
   @Test
   fun configureRepositories_withProjectPropertySet_hasHigherPriorityThanMavenCentral() {
     val localMaven = tempFolder.newFolder("m2")
-    val localMavenURI = URI.create("file://$localMaven/")
+    val localMavenURI = localMaven.toURI()
     val mavenCentralURI = URI.create("https://repo.maven.apache.org/maven2/")
     val project = createProject()
-    project.extensions.extraProperties.set("REACT_NATIVE_MAVEN_LOCAL_REPO", localMaven)
+    project.extensions.extraProperties.set("REACT_NATIVE_MAVEN_LOCAL_REPO", localMaven.absolutePath)
 
     configureRepositories(project, tempFolder.root)
 
@@ -226,6 +228,66 @@ class DependencyUtilsTest {
   }
 
   @Test
+  fun configureDependencies_withVersionStringAndGroupString_appliesOnAllProjects() {
+    val rootProject = ProjectBuilder.builder().build()
+    val appProject = ProjectBuilder.builder().withName("app").withParent(rootProject).build()
+    val libProject = ProjectBuilder.builder().withName("lib").withParent(rootProject).build()
+    appProject.plugins.apply("com.android.application")
+    libProject.plugins.apply("com.android.library")
+
+    configureDependencies(appProject, "1.2.3", "io.github.test")
+
+    val appForcedModules = appProject.configurations.first().resolutionStrategy.forcedModules
+    val libForcedModules = libProject.configurations.first().resolutionStrategy.forcedModules
+    assertTrue(appForcedModules.any { it.toString() == "io.github.test:react-android:1.2.3" })
+    assertTrue(appForcedModules.any { it.toString() == "io.github.test:hermes-android:1.2.3" })
+    assertTrue(libForcedModules.any { it.toString() == "io.github.test:react-android:1.2.3" })
+    assertTrue(libForcedModules.any { it.toString() == "io.github.test:hermes-android:1.2.3" })
+  }
+
+  @Test
+  fun getDependencySubstitutions_withDefaultGroup_substitutesCorrectly() {
+    val dependencySubstitutions = getDependencySubstitutions("0.42.0")
+
+    assertEquals(dependencySubstitutions[0].first, "com.facebook.react:react-native")
+    assertEquals(dependencySubstitutions[0].second, "com.facebook.react:react-android:0.42.0")
+    assertEquals(
+        dependencySubstitutions[0].third,
+        "The react-native artifact was deprecated in favor of react-android due to https://github.com/facebook/react-native/issues/35210.")
+    assertEquals(dependencySubstitutions[1].first, "com.facebook.react:hermes-engine")
+    assertEquals(dependencySubstitutions[1].second, "com.facebook.react:hermes-android:0.42.0")
+    assertEquals(
+        dependencySubstitutions[1].third,
+        "The hermes-engine artifact was deprecated in favor of hermes-android due to https://github.com/facebook/react-native/issues/35210.")
+  }
+
+  @Test
+  fun getDependencySubstitutions_withCustomGroup_substitutesCorrectly() {
+    val dependencySubstitutions = getDependencySubstitutions("0.42.0", "io.github.test")
+
+    assertEquals(dependencySubstitutions[0].first, "com.facebook.react:react-native")
+    assertEquals(dependencySubstitutions[0].second, "io.github.test:react-android:0.42.0")
+    assertEquals(
+        dependencySubstitutions[0].third,
+        "The react-native artifact was deprecated in favor of react-android due to https://github.com/facebook/react-native/issues/35210.")
+    assertEquals(dependencySubstitutions[1].first, "com.facebook.react:hermes-engine")
+    assertEquals(dependencySubstitutions[1].second, "io.github.test:hermes-android:0.42.0")
+    assertEquals(
+        dependencySubstitutions[1].third,
+        "The hermes-engine artifact was deprecated in favor of hermes-android due to https://github.com/facebook/react-native/issues/35210.")
+    assertEquals(dependencySubstitutions[2].first, "com.facebook.react:react-android")
+    assertEquals(dependencySubstitutions[2].second, "io.github.test:react-android:0.42.0")
+    assertEquals(
+        dependencySubstitutions[2].third,
+        "The react-android dependency was modified to use the correct Maven group.")
+    assertEquals(dependencySubstitutions[3].first, "com.facebook.react:hermes-android")
+    assertEquals(dependencySubstitutions[3].second, "io.github.test:hermes-android:0.42.0")
+    assertEquals(
+        dependencySubstitutions[3].third,
+        "The hermes-android dependency was modified to use the correct Maven group.")
+  }
+
+  @Test
   fun readVersionString_withCorrectVersionString_returnsIt() {
     val propertiesFile =
         tempFolder.newFile("gradle.properties").apply {
@@ -237,7 +299,7 @@ class DependencyUtilsTest {
                   .trimIndent())
         }
 
-    val versionString = readVersionString(propertiesFile)
+    val versionString = readVersionAndGroupStrings(propertiesFile).first
 
     assertEquals("1000.0.0", versionString)
   }
@@ -254,7 +316,7 @@ class DependencyUtilsTest {
                   .trimIndent())
         }
 
-    val versionString = readVersionString(propertiesFile)
+    val versionString = readVersionAndGroupStrings(propertiesFile).first
 
     assertEquals("0.0.0-20221101-2019-cfe811ab1-SNAPSHOT", versionString)
   }
@@ -270,7 +332,7 @@ class DependencyUtilsTest {
                   .trimIndent())
         }
 
-    val versionString = readVersionString(propertiesFile)
+    val versionString = readVersionAndGroupStrings(propertiesFile).first
     assertEquals("", versionString)
   }
 
@@ -286,8 +348,41 @@ class DependencyUtilsTest {
                   .trimIndent())
         }
 
-    val versionString = readVersionString(propertiesFile)
+    val versionString = readVersionAndGroupStrings(propertiesFile).first
     assertEquals("", versionString)
+  }
+
+  @Test
+  fun readGroupString_withCorrectGroupString_returnsIt() {
+    val propertiesFile =
+        tempFolder.newFile("gradle.properties").apply {
+          writeText(
+              """
+        GROUP=io.github.test
+        ANOTHER_PROPERTY=true
+      """
+                  .trimIndent())
+        }
+
+    val groupString = readVersionAndGroupStrings(propertiesFile).second
+
+    assertEquals("io.github.test", groupString)
+  }
+
+  @Test
+  fun readGroupString_withEmptyGroupString_returnsDefault() {
+    val propertiesFile =
+        tempFolder.newFile("gradle.properties").apply {
+          writeText(
+              """
+        ANOTHER_PROPERTY=true
+      """
+                  .trimIndent())
+        }
+
+    val groupString = readVersionAndGroupStrings(propertiesFile).second
+
+    assertEquals("com.facebook.react", groupString)
   }
 
   @Test
@@ -296,5 +391,14 @@ class DependencyUtilsTest {
     val mavenRepo = process.mavenRepoFromUrl("https://hello.world")
 
     assertEquals(URI.create("https://hello.world"), mavenRepo.url)
+  }
+
+  @Test
+  fun mavenRepoFromURI_worksCorrectly() {
+    val process = createProject()
+    val repoFolder = tempFolder.newFolder("maven-repo")
+    val mavenRepo = process.mavenRepoFromURI(repoFolder.toURI())
+
+    assertEquals(repoFolder.toURI(), mavenRepo.url)
   }
 }

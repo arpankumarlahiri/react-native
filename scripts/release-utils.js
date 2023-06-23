@@ -10,9 +10,11 @@
 'use strict';
 
 const {exec, echo, exit, test, env, pushd, popd} = require('shelljs');
-const {createHermesPrebuiltArtifactsTarball} = require('./hermes/hermes-utils');
+const {
+  createHermesPrebuiltArtifactsTarball,
+} = require('../packages/react-native/scripts/hermes/hermes-utils');
 
-function generateAndroidArtifacts(releaseVersion, tmpPublishingFolder) {
+function generateAndroidArtifacts(releaseVersion) {
   // -------- Generating Android Artifacts
   echo('Generating Android artifacts inside /tmp/maven-local');
   if (exec('./gradlew publishAllToMavenTempLocal').code) {
